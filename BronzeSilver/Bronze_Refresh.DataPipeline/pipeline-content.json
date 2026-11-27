@@ -1,0 +1,495 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "type": "Lookup",
+        "typeProperties": {
+          "source": {
+            "type": "DataWarehouseSource",
+            "sqlReaderQuery": "SELECT TableName,\n       CONVERT(\n             VARCHAR(23), WatermarkValue, 126) AS WatermarkValue\nFROM dbo.Bronze_Watermark\nWHERE TableName = 'Bronze_wm';",
+            "partitionOption": "None",
+            "queryTimeout": "02:00:00"
+          },
+          "datasetSettings": {
+            "type": "DataWarehouseTable",
+            "schema": [],
+            "linkedService": {
+              "name": "DWH_Control_MG",
+              "properties": {
+                "type": "DataWarehouse",
+                "typeProperties": {
+                  "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+                  "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+                  "workspaceId": "00000000-0000-0000-0000-000000000000"
+                },
+                "annotations": []
+              }
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Lookup_Old_WM",
+        "dependsOn": []
+      },
+      {
+        "type": "Lookup",
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "SELECT CONVERT(VARCHAR(23),\n         COALESCE(\nMAX([LastModifiedtime]), '1900-01-01'), 126) AS NewWatermarkValue\nFROM [UGTBI].[dbo].[Sales_Raw_MG]",
+            "partitionOption": "None",
+            "queryTimeout": "02:00:00"
+          },
+          "datasetSettings": {
+            "type": "SqlServerTable",
+            "typeProperties": {
+              "database": "UGTBI"
+            },
+            "schema": [],
+            "externalReferences": {
+              "connection": "04d3fdb0-b8b1-43cb-9357-f40bdb02cb24"
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Lookup_New_WM",
+        "dependsOn": []
+      },
+      {
+        "type": "SetVariable",
+        "typeProperties": {
+          "variableName": "Var_RunID",
+          "value": {
+            "value": "@guid()",
+            "type": "Expression"
+          }
+        },
+        "policy": {
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Set_RunID",
+        "dependsOn": [
+          {
+            "activity": "Lookup_Old_WM",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          },
+          {
+            "activity": "Lookup_New_WM",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "SqlServerStoredProcedure",
+        "typeProperties": {
+          "storedProcedureName": "[dbo].[usp_Bronze_LogStart]",
+          "storedProcedureParameters": {
+            "PipelineName": {
+              "value": "Bronze_Refresh",
+              "type": "String"
+            },
+            "RunID": {
+              "value": {
+                "value": "@variables('Var_RunID')",
+                "type": "Expression"
+              },
+              "type": "Guid"
+            },
+            "TableName": {
+              "value": "Sales_Raw_MG",
+              "type": "String"
+            }
+          }
+        },
+        "linkedService": {
+          "name": "DWH_Control_MG",
+          "properties": {
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+              "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+              "workspaceId": "00000000-0000-0000-0000-000000000000"
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Log_Start",
+        "dependsOn": [
+          {
+            "activity": "Set_RunID",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "Copy",
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": {
+              "value": "SELECT \n RowID, \n TransactionID, \n LineNumber, \n TransactionDateTime, \n StoreID, \n CustomerID,\n ProductID, \n Quantity, \n UnitPrice, \n Discount, \n TotalAmount, \n PaymentMethod,\n CashierID, \n [LastModifiedtime]\nFROM UGTBI.dbo.Sales_Raw_MG\nWHERE [LastModifiedtime]>'@{activity('Lookup_Old_WM').output.firstRow.WatermarkValue}'\n AND [LastModifiedtime]<='@{activity('Lookup_New_WM').output.firstRow.NewWatermarkValue}'",
+              "type": "Expression"
+            },
+            "partitionOption": "None",
+            "queryTimeout": "02:00:00",
+            "datasetSettings": {
+              "type": "SqlServerTable",
+              "typeProperties": {
+                "database": "UGTBI"
+              },
+              "schema": [],
+              "externalReferences": {
+                "connection": "04d3fdb0-b8b1-43cb-9357-f40bdb02cb24"
+              },
+              "annotations": []
+            }
+          },
+          "sink": {
+            "type": "LakehouseTableSink",
+            "tableActionOption": "Append",
+            "applyVOrder": false,
+            "enableTimestampNtz": false,
+            "datasetSettings": {
+              "type": "LakehouseTable",
+              "typeProperties": {
+                "schema": "dbo",
+                "table": "raw_bronze_data"
+              },
+              "schema": [],
+              "linkedService": {
+                "name": "lh_Bronze_MG",
+                "properties": {
+                  "type": "Lakehouse",
+                  "typeProperties": {
+                    "artifactId": "dff7117d-53be-92c0-47e6-a31d80114610",
+                    "workspaceId": "00000000-0000-0000-0000-000000000000",
+                    "rootFolder": "Tables"
+                  },
+                  "annotations": []
+                }
+              },
+              "annotations": []
+            }
+          },
+          "translator": {
+            "type": "TabularTranslator",
+            "typeConversion": true,
+            "typeConversionSettings": {
+              "allowDataTruncation": true,
+              "treatBooleanAsNumber": false
+            }
+          },
+          "enableStaging": false
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Raw_Import",
+        "dependsOn": [
+          {
+            "activity": "Log_Start",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "SqlServerStoredProcedure",
+        "typeProperties": {
+          "storedProcedureName": "[dbo].[usp_Bronze_LogError]",
+          "storedProcedureParameters": {
+            "ErrorMessage": {
+              "value": {
+                "value": "@activity('Raw_Import').error.message",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "RunID": {
+              "value": {
+                "value": "@variables('Var_RunID')",
+                "type": "Expression"
+              },
+              "type": "Guid"
+            }
+          }
+        },
+        "linkedService": {
+          "name": "DWH_Control_MG",
+          "properties": {
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+              "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+              "workspaceId": "00000000-0000-0000-0000-000000000000"
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Log_Error",
+        "dependsOn": [
+          {
+            "activity": "Raw_Import",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "SqlServerStoredProcedure",
+        "typeProperties": {
+          "storedProcedureName": "[dbo].[usp_Bronze_LogSuccess]",
+          "storedProcedureParameters": {
+            "RowsRead": {
+              "value": {
+                "value": "@coalesce(activity('Raw_Import').output?.rowsRead, 0)",
+                "type": "Expression"
+              },
+              "type": "Int32"
+            },
+            "RowsWritten": {
+              "value": {
+                "value": "@coalesce(activity('Raw_Import').output?.rowsCopied, 0)",
+                "type": "Expression"
+              },
+              "type": "Int32"
+            },
+            "RunID": {
+              "value": {
+                "value": "@variables('Var_RunID')",
+                "type": "Expression"
+              },
+              "type": "Guid"
+            }
+          }
+        },
+        "linkedService": {
+          "name": "DWH_Control_MG",
+          "properties": {
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+              "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+              "workspaceId": "00000000-0000-0000-0000-000000000000"
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Log_Success",
+        "dependsOn": [
+          {
+            "activity": "Raw_Import",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "SqlServerStoredProcedure",
+        "typeProperties": {
+          "storedProcedureName": "[dbo].[usp_write_watermark]",
+          "storedProcedureParameters": {
+            "LastModifiedtime": {
+              "value": {
+                "value": "@{activity('Lookup_New_WM').output.firstRow.NewWatermarkValue}",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "TableName": {
+              "value": {
+                "value": "@{activity('Lookup_Old_WM').output.firstRow.TableName}",
+                "type": "Expression"
+              },
+              "type": "String"
+            }
+          }
+        },
+        "linkedService": {
+          "name": "DWH_Control_MG",
+          "properties": {
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+              "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+              "workspaceId": "00000000-0000-0000-0000-000000000000"
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Update_Bronze_WM",
+        "dependsOn": [
+          {
+            "activity": "Log_Success",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "SqlServerStoredProcedure",
+        "typeProperties": {
+          "storedProcedureName": "[dbo].[usp_Bronze_LogError]",
+          "storedProcedureParameters": {
+            "ErrorMessage": {
+              "value": {
+                "value": "@{activity('Log_Success').error.message}",
+                "type": "Expression"
+              },
+              "type": "String"
+            },
+            "RunID": {
+              "value": {
+                "value": "@variables('Var_RunID')",
+                "type": "Expression"
+              },
+              "type": "Guid"
+            }
+          }
+        },
+        "linkedService": {
+          "name": "DWH_Control_MG",
+          "properties": {
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+              "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+              "workspaceId": "00000000-0000-0000-0000-000000000000"
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Log_Success_Error",
+        "dependsOn": [
+          {
+            "activity": "Log_Success",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "Fail",
+        "typeProperties": {
+          "message": {
+            "value": "@{activity('Raw_Import').error.message}",
+            "type": "Expression"
+          },
+          "errorCode": {
+            "value": "@{activity('Raw_Import'). error.errorCode}",
+            "type": "Expression"
+          }
+        },
+        "name": "Fail1",
+        "dependsOn": [
+          {
+            "activity": "Log_Error",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "Office365Email",
+        "typeProperties": {
+          "body": "<p><b>Log RunID:</b> @{variables('Var_RunID')}</p>\n<p><b>დრო (UTC):</b> @{utcNow()}</p>",
+          "to": "gubelidze@live.com",
+          "subject": {
+            "value": "@{pipeline().Pipeline} FAILED – Raw_Import",
+            "type": "Expression"
+          }
+        },
+        "externalReferences": {
+          "connection": "a6557eb1-94bc-4b43-9995-f6a6281f6fe7"
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Office365Email1",
+        "dependsOn": [
+          {
+            "activity": "Raw_Import",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          }
+        ]
+      }
+    ],
+    "variables": {
+      "Var_RunID": {
+        "type": "String"
+      }
+    }
+  }
+}
