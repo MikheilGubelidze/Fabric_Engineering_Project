@@ -1,0 +1,562 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "type": "Lookup",
+        "typeProperties": {
+          "source": {
+            "type": "DataWarehouseSource",
+            "sqlReaderQuery": "SELECT TableName,\n       CONVERT(VARCHAR(27), WatermarkValue, 126) AS WatermarkValue\nFROM dbo.Silver_Watermark\nWHERE TableName = 'Silver_Sales';",
+            "partitionOption": "None",
+            "queryTimeout": "02:00:00"
+          },
+          "datasetSettings": {
+            "type": "DataWarehouseTable",
+            "schema": [],
+            "linkedService": {
+              "name": "DWH_Control_MG",
+              "properties": {
+                "type": "DataWarehouse",
+                "typeProperties": {
+                  "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+                  "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+                  "workspaceId": "00000000-0000-0000-0000-000000000000"
+                },
+                "annotations": []
+              }
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Lookup_Old_WM",
+        "dependsOn": []
+      },
+      {
+        "type": "Lookup",
+        "typeProperties": {
+          "source": {
+            "type": "DataWarehouseSource",
+            "sqlReaderQuery": "SELECT \n    CONVERT(VARCHAR(27), WatermarkValue, 126) AS NewWatermarkValue\nFROM dbo.Bronze_Watermark\nWHERE TableName = 'Bronze_wm';",
+            "partitionOption": "None",
+            "queryTimeout": "02:00:00"
+          },
+          "datasetSettings": {
+            "type": "DataWarehouseTable",
+            "schema": [],
+            "linkedService": {
+              "name": "DWH_Control_MG",
+              "properties": {
+                "type": "DataWarehouse",
+                "typeProperties": {
+                  "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+                  "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+                  "workspaceId": "00000000-0000-0000-0000-000000000000"
+                },
+                "annotations": []
+              }
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Lookup_New_WM",
+        "dependsOn": []
+      },
+      {
+        "type": "SetVariable",
+        "typeProperties": {
+          "variableName": "Var_RunID",
+          "value": "@guid()"
+        },
+        "policy": {
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Var_RunID",
+        "dependsOn": [
+          {
+            "activity": "Lookup_New_WM",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          },
+          {
+            "activity": "Lookup_Old_WM",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "SqlServerStoredProcedure",
+        "typeProperties": {
+          "storedProcedureName": "[dbo].[usp_Silver_LogStart]",
+          "storedProcedureParameters": {
+            "PipelineName": {
+              "value": "Silver_Refresh",
+              "type": "String"
+            },
+            "RunID": {
+              "value": "@variables('Var_RunID')",
+              "type": "Guid"
+            },
+            "TableName": {
+              "value": "Silver_Sales",
+              "type": "String"
+            }
+          }
+        },
+        "linkedService": {
+          "name": "DWH_Control_MG",
+          "properties": {
+            "type": "DataWarehouse",
+            "typeProperties": {
+              "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+              "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+              "workspaceId": "00000000-0000-0000-0000-000000000000"
+            },
+            "annotations": []
+          }
+        },
+        "policy": {
+          "timeout": "0.12:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureInput": false,
+          "secureOutput": false
+        },
+        "name": "Log_Start",
+        "dependsOn": [
+          {
+            "activity": "Var_RunID",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      },
+      {
+        "type": "IfCondition",
+        "typeProperties": {
+          "expression": {
+            "value": "@greater(\n    ticks(activity('Lookup_New_WM').output.firstRow.NewWatermarkValue),\n    ticks(activity('Lookup_Old_WM').output.firstRow.WatermarkValue) )",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "type": "TridentNotebook",
+              "typeProperties": {
+                "notebookId": "6975a9b5-54d0-b2a1-4a51-4d8c41e580d7",
+                "workspaceId": "00000000-0000-0000-0000-000000000000",
+                "parameters": {
+                  "run_id": {
+                    "value": "@variables('Var_RunID')",
+                    "type": "string"
+                  },
+                  "wm_from": {
+                    "value": "@activity('Lookup_Old_WM').output.firstRow.WatermarkValue",
+                    "type": "string"
+                  },
+                  "wm_to": {
+                    "value": "@activity('Lookup_New_WM').output.firstRow.NewWatermarkValue",
+                    "type": "string"
+                  }
+                }
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "NB_Bronze_To_Silver",
+              "dependsOn": []
+            },
+            {
+              "type": "SqlServerStoredProcedure",
+              "typeProperties": {
+                "storedProcedureName": "[dbo].[usp_Silver_WriteWatermark]",
+                "storedProcedureParameters": {
+                  "TableName": {
+                    "value": "@activity('Lookup_Old_WM').output.firstRow.TableName",
+                    "type": "String"
+                  },
+                  "WatermarkValue": {
+                    "value": "@activity('Lookup_New_WM').output.firstRow.NewWatermarkValue",
+                    "type": "String"
+                  }
+                }
+              },
+              "linkedService": {
+                "name": "DWH_Control_MG",
+                "properties": {
+                  "type": "DataWarehouse",
+                  "typeProperties": {
+                    "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+                    "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+                    "workspaceId": "00000000-0000-0000-0000-000000000000"
+                  },
+                  "annotations": []
+                }
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Update_Silver_WM",
+              "dependsOn": [
+                {
+                  "activity": "NB_Bronze_To_Silver",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "SqlServerStoredProcedure",
+              "typeProperties": {
+                "storedProcedureName": "[dbo].[usp_Silver_LogSuccess]",
+                "storedProcedureParameters": {
+                  "RowsRead": {
+                    "value": "@json(activity('NB_Bronze_To_Silver').output.result.exitValue).RowsRead",
+                    "type": "Int32"
+                  },
+                  "RowsRejected": {
+                    "value": "@json(activity('NB_Bronze_To_Silver').output.result.exitValue).RowsRejected",
+                    "type": "Int32"
+                  },
+                  "RowsSuperseded": {
+                    "value": "@json(activity('NB_Bronze_To_Silver').output.result.exitValue).RowsSuperseded",
+                    "type": "Int32"
+                  },
+                  "RowsValid": {
+                    "value": "@json(activity('NB_Bronze_To_Silver').output.result.exitValue).RowsValid",
+                    "type": "Int32"
+                  },
+                  "RunID": {
+                    "value": "@variables('Var_RunID')",
+                    "type": "Guid"
+                  },
+                  "Status": {
+                    "value": "@json(activity('NB_Bronze_To_Silver').output.result.exitValue).Status",
+                    "type": "String"
+                  }
+                }
+              },
+              "linkedService": {
+                "name": "DWH_Control_MG",
+                "properties": {
+                  "type": "DataWarehouse",
+                  "typeProperties": {
+                    "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+                    "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+                    "workspaceId": "00000000-0000-0000-0000-000000000000"
+                  },
+                  "annotations": []
+                }
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Log_Success",
+              "dependsOn": [
+                {
+                  "activity": "Update_Silver_WM",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "SqlServerStoredProcedure",
+              "typeProperties": {
+                "storedProcedureName": "[dbo].[usp_Silver_LogError]",
+                "storedProcedureParameters": {
+                  "ErrorMessage": {
+                    "value": "@activity('NB_Bronze_To_Silver').error.message",
+                    "type": "String"
+                  },
+                  "RunID": {
+                    "value": "@variables('Var_RunID')",
+                    "type": "Guid"
+                  }
+                }
+              },
+              "linkedService": {
+                "name": "DWH_Control_MG",
+                "properties": {
+                  "type": "DataWarehouse",
+                  "typeProperties": {
+                    "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+                    "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+                    "workspaceId": "00000000-0000-0000-0000-000000000000"
+                  },
+                  "annotations": []
+                }
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Log_Error",
+              "dependsOn": [
+                {
+                  "activity": "NB_Bronze_To_Silver",
+                  "dependencyConditions": [
+                    "Failed"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "Office365Email",
+              "typeProperties": {
+                "body": "<p><b>Log RunID:</b> @{variables('Var_RunID')}</p>\n<p><b>დრო (UTC):</b> @{utcNow()}</p>",
+                "to": "gubelidze@live.com",
+                "subject": "@{pipeline().Pipeline} FAILED – NB_Bronze_To_Silver"
+              },
+              "externalReferences": {
+                "connection": "a6557eb1-94bc-4b43-9995-f6a6281f6fe7"
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Office365Email1",
+              "dependsOn": [
+                {
+                  "activity": "NB_Bronze_To_Silver",
+                  "dependencyConditions": [
+                    "Failed"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "Fail",
+              "typeProperties": {
+                "message": "@{activity('NB_Bronze_To_Silver').error.message}",
+                "errorCode": "\t@{activity('NB_Bronze_To_Silver').error.errorCode}"
+              },
+              "name": "Fail1",
+              "dependsOn": [
+                {
+                  "activity": "Log_Error",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "SqlServerStoredProcedure",
+              "typeProperties": {
+                "storedProcedureName": "[dbo].[usp_Silver_LogError]",
+                "storedProcedureParameters": {
+                  "ErrorMessage": {
+                    "value": {
+                      "value": "@{activity('Update_Silver_WM').error.message}",
+                      "type": "Expression"
+                    },
+                    "type": "String"
+                  },
+                  "RunID": {
+                    "value": "@variables('Var_RunID')",
+                    "type": "Guid"
+                  }
+                }
+              },
+              "linkedService": {
+                "name": "DWH_Control_MG",
+                "properties": {
+                  "type": "DataWarehouse",
+                  "typeProperties": {
+                    "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+                    "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+                    "workspaceId": "00000000-0000-0000-0000-000000000000"
+                  },
+                  "annotations": []
+                }
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Log_WM_Error",
+              "dependsOn": [
+                {
+                  "activity": "Update_Silver_WM",
+                  "dependencyConditions": [
+                    "Failed"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "Fail",
+              "typeProperties": {
+                "message": "@{activity('Update_Silver_WM').error.message}",
+                "errorCode": "\tSILVER_WM_UPDATE_FAILED"
+              },
+              "name": "Fail2",
+              "dependsOn": [
+                {
+                  "activity": "Log_WM_Error",
+                  "dependencyConditions": [
+                    "Succeeded"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "SqlServerStoredProcedure",
+              "typeProperties": {
+                "storedProcedureName": "[dbo].[usp_Silver_LogError]",
+                "storedProcedureParameters": {
+                  "ErrorMessage": {
+                    "value": "@{activity('Log_Success').error.message}",
+                    "type": "String"
+                  },
+                  "RunID": {
+                    "value": "@variables('Var_RunID')",
+                    "type": "Guid"
+                  }
+                }
+              },
+              "linkedService": {
+                "name": "DWH_Control_MG",
+                "properties": {
+                  "type": "DataWarehouse",
+                  "typeProperties": {
+                    "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+                    "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+                    "workspaceId": "00000000-0000-0000-0000-000000000000"
+                  },
+                  "annotations": []
+                }
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Log_Success_Error",
+              "dependsOn": [
+                {
+                  "activity": "Log_Success",
+                  "dependencyConditions": [
+                    "Failed"
+                  ]
+                }
+              ]
+            }
+          ],
+          "ifFalseActivities": [
+            {
+              "type": "SqlServerStoredProcedure",
+              "typeProperties": {
+                "storedProcedureName": "[dbo].[usp_Silver_LogSuccess]",
+                "storedProcedureParameters": {
+                  "RowsRead": {
+                    "value": "0",
+                    "type": "Int32"
+                  },
+                  "RowsRejected": {
+                    "value": "0",
+                    "type": "Int32"
+                  },
+                  "RowsSuperseded": {
+                    "value": "0",
+                    "type": "Int32"
+                  },
+                  "RowsValid": {
+                    "value": "0",
+                    "type": "Int32"
+                  },
+                  "RunID": {
+                    "value": "@variables('Var_RunID')",
+                    "type": "Guid"
+                  },
+                  "Status": {
+                    "value": "NoDate",
+                    "type": "String"
+                  }
+                }
+              },
+              "linkedService": {
+                "name": "DWH_Control_MG",
+                "properties": {
+                  "type": "DataWarehouse",
+                  "typeProperties": {
+                    "artifactId": "c92739d2-f93e-8a50-4f0f-a8b40f5fd5c0",
+                    "endpoint": "2k4cbaxoohluvdfwgtsz6g3rqu-6kg5grdqemyunluhrqah43yzq4.datawarehouse.fabric.microsoft.com",
+                    "workspaceId": "00000000-0000-0000-0000-000000000000"
+                  },
+                  "annotations": []
+                }
+              },
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 0,
+                "retryIntervalInSeconds": 30,
+                "secureInput": false,
+                "secureOutput": false
+              },
+              "name": "Log_NoData",
+              "dependsOn": []
+            }
+          ]
+        },
+        "name": "If_New_Data",
+        "dependsOn": [
+          {
+            "activity": "Log_Start",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ]
+      }
+    ],
+    "variables": {
+      "Var_RunID": {
+        "type": "String"
+      }
+    }
+  }
+}
